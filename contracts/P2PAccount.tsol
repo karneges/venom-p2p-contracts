@@ -1,0 +1,243 @@
+pragma ever-solidity >= 0.62.0;
+
+pragma AbiHeader expire;
+pragma AbiHeader pubkey;
+
+import "./lib/Errors.tsol";
+import "./lib/CommonStructs.tsol";
+import "./lib/Gas.tsol";
+import "./interfaces/IP2PRoot.tsol";
+import "@broxus/ever-contracts/contracts/libraries/MsgFlag.tsol";
+import "@broxus/tip3/contracts/interfaces/ITokenWallet.tsol";
+import "@broxus/tip3/contracts/interfaces/IAcceptTokensTransferCallback.tsol";
+
+
+
+
+contract P2PAccount is IAcceptTokensTransferCallback {
+
+    struct Details {
+        address owner;
+        uint128 currentOrderNonce;
+        mapping (uint128 => CommonStructs.OrderInternal) orders;
+    }
+
+    address static root;
+    address static owner;
+    uint128 currentOrderNonce;
+    mapping (uint128 => CommonStructs.OrderInternal) public orders;
+    TvmCell dummyPayload;
+    modifier onlyRoot() {
+        require(msg.sender == root, Errors.NOT_ROOT);
+        _;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, Errors.NOT_OWNER);
+        _;
+    }
+
+    modifier minCallValue() {
+        require(msg.value >= Gas.MIN_CALL_VALUE, Errors.NOT_OWNER);
+        _;
+    }
+
+    function _reserve() internal pure returns (uint128) {
+        return math.max(address(this).balance - msg.value, Gas.MIN_ROOT_BALANCE);
+    }
+    function _reserveWithMinusValue(uint128 _value) internal pure returns (uint128) {
+        return math.max(address(this).balance - (msg.value - _value), Gas.MIN_ROOT_BALANCE);
+    }
+    function _reserveWithPlusValue(uint128 _value) internal pure returns (uint128) {
+        return math.max(address(this).balance - (msg.value + _value), Gas.MIN_ROOT_BALANCE);
+    }
+
+    constructor() public {
+        tvm.accept();
+        IP2PRoot(root).onAccountCreated{value: 0.1 ever, bounce: false}(owner);
+    }
+
+    function getDetails() public view returns (Details) {
+        return Details({
+            owner: owner,
+            currentOrderNonce: currentOrderNonce,
+            orders: orders
+        });
+    }
+    function buildCreateOrderPayload(CommonStructs.Order _order) public pure returns (TvmCell) {
+        return abi.encode(CommonStructs.OperationType.CREATE_ORDER, abi.encode(_order));
+    }
+
+    function buildSubmitOrderPayload(uint128 _orderNonce) public pure returns (TvmCell) {
+        return abi.encode(CommonStructs.OperationType.SUBMIT_ORDER, abi.encode(_orderNonce));
+    }
+
+    function createOrder(CommonStructs.Order _order, address spentTokenWallet) internal {
+        tvm.rawReserve(_reserveWithMinusValue(Gas.ORDER_FEE + Gas.DEPLOY_WALLET_VALUE), 0);
+
+
+        CommonStructs.OrderInternal order = CommonStructs.OrderInternal({
+            spendTokenRoot: _order.spendTokenRoot,
+            receiveTokenRoot: _order.receiveTokenRoot,
+            spendAmount: _order.spendAmount,
+            receiveAmount: _order.receiveAmount,
+            receiveAccountTokenWallet: _order.receiveAccountTokenWallet,
+            spendAccountTokenWallet: spentTokenWallet,
+            state: CommonStructs.OrderState.ACTIVE
+        });
+
+        orders[currentOrderNonce] = order;
+
+        IP2PRoot(root).onOrderCreated{
+            value: 0,
+            flag: MsgFlag.ALL_NOT_RESERVED,
+            bounce: false
+        }(owner, currentOrderNonce);
+        currentOrderNonce++;
+    }
+
+    function submitOrder(
+        uint128 _orderNonce,
+        address _tokenRoot,
+        uint128 _amount,
+        address _sender,
+        address _senderWallet,
+        address _remainingGasTo
+    ) internal returns (bool) {
+        if (msg.value < Gas.MIN_CALL_VALUE + Gas.ORDER_FEE + Gas.DEPLOY_WALLET_VALUE) {
+            return false;
+        }
+        tvm.rawReserve(_reserveWithPlusValue(Gas.ORDER_FEE), 0);
+        if (!orders.exists(_orderNonce)) {
+            return false;
+        }
+
+        CommonStructs.OrderInternal order = orders[_orderNonce];
+        if (order.state != CommonStructs.OrderState.ACTIVE) {
+            return false;
+        }
+
+        if (_tokenRoot != order.receiveTokenRoot) {
+            return false;
+        }
+
+        if (msg.sender != order.receiveAccountTokenWallet) {
+            return false;
+        }
+
+        if (_amount != order.receiveAmount) {
+            return false;
+        }
+        delete orders[_orderNonce];
+
+        //send tokens to seller
+        ITokenWallet(order.receiveAccountTokenWallet).transfer{value: Gas.ORDER_FEE + Gas.DEPLOY_WALLET_VALUE}(
+            order.receiveAmount,
+            owner,
+            Gas.DEPLOY_WALLET_VALUE,
+            owner,
+            false,
+            dummyPayload
+        );
+        //send tokens to buyer
+        ITokenWallet(order.spendAccountTokenWallet).transfer{value: Gas.ORDER_FEE + Gas.DEPLOY_WALLET_VALUE}(
+            order.spendAmount,
+            _sender,
+            Gas.DEPLOY_WALLET_VALUE,
+            _remainingGasTo,
+            false,
+            dummyPayload
+        );
+        IP2PRoot(root).onOrderSubmitted{
+            value: 0,
+            flag: MsgFlag.ALL_NOT_RESERVED,
+            bounce: false
+        }(owner, _orderNonce, _sender);
+        return true;
+    }
+
+    function cancelOrder(uint128 orderNonce) public onlyOwner {
+        tvm.rawReserve(_reserveWithPlusValue(Gas.ORDER_FEE + Gas.DEPLOY_WALLET_VALUE), 0);
+        CommonStructs.OrderInternal order = orders[orderNonce];
+        delete orders[orderNonce];
+        ITokenWallet(order.spendAccountTokenWallet).transfer{value: 0.1 ever}(
+            order.spendAmount,
+            owner,
+            0,
+            owner,
+            false,
+            dummyPayload
+        );
+
+        IP2PRoot(root).onOrderCanceled{
+            value: 0,
+            flag: MsgFlag.ALL_NOT_RESERVED,
+            bounce: false
+        }(owner, orderNonce);
+    }
+
+    function onAcceptTokensTransfer(
+        address _tokenRoot,
+        uint128 _amount,
+        address _sender,
+        address _senderWallet,
+        address _remainingGasTo,
+        TvmCell _payload
+    ) external override {
+        (
+            CommonStructs.OperationType operationType,
+            TvmCell restPayload
+        ) = abi.decode(_payload, (CommonStructs.OperationType, TvmCell));
+
+        if (operationType == CommonStructs.OperationType.CREATE_ORDER) {
+            CommonStructs.Order _order = abi.decode(restPayload, (CommonStructs.Order));
+            if (
+                _amount != _order.spendAmount ||
+                _sender != owner ||
+                msg.value < Gas.MIN_CALL_VALUE + Gas.ORDER_FEE + Gas.DEPLOY_WALLET_VALUE
+            ) {
+                tvm.rawReserve(_reserve(), 0);
+
+                ITokenWallet(msg.sender).transfer{value: 0, flag: MsgFlag.ALL_NOT_RESERVED, bounce: false}(
+                    _amount,
+                    _sender,
+                    0,
+                    _remainingGasTo,
+                    true,
+                    _payload
+                );
+                return;
+            }
+            createOrder(_order, msg.sender);
+            return;
+        }
+
+        if (operationType == CommonStructs.OperationType.SUBMIT_ORDER) {
+
+            uint128 _orderNonce = abi.decode(restPayload, (uint128));
+
+            bool isOk = submitOrder(
+                _orderNonce,
+                _tokenRoot,
+                _amount,
+                _sender,
+                _senderWallet,
+                _remainingGasTo
+            );
+
+            if (!isOk) {
+                ITokenWallet(msg.sender).transfer{value: 0, flag: MsgFlag.ALL_NOT_RESERVED, bounce: false}(
+                    _amount,
+                    _sender,
+                    0,
+                    _remainingGasTo,
+                    true,
+                    _payload
+                );
+                return;
+            }
+        }
+
+    }
+
+}

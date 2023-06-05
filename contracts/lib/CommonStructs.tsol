@@ -1,0 +1,32 @@
+pragma ever-solidity >= 0.62.0;
+
+
+library CommonStructs {
+    enum OrderState {
+        INITIAL,
+        ACTIVE,
+        CANCELED,
+        COMPLETED
+    }
+    enum OperationType {
+        CREATE_ORDER,
+        SUBMIT_ORDER
+    }
+    struct Order {
+        address spendTokenRoot;
+        address receiveTokenRoot;
+        uint128 spendAmount;
+        uint128 receiveAmount;
+        address receiveAccountTokenWallet;
+    }
+    struct OrderInternal {
+        address spendTokenRoot;
+        address receiveTokenRoot;
+        uint128 spendAmount;
+        uint128 receiveAmount;
+        address receiveAccountTokenWallet;
+        address spendAccountTokenWallet;
+        OrderState state;
+    }
+
+}

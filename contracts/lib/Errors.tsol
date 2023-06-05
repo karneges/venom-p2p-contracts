@@ -1,0 +1,13 @@
+pragma ever-solidity >= 0.62.0;
+
+
+library Errors {
+    // Root error
+    uint16 constant ERR_NO_ERROR = 1000;
+    uint16 constant NOT_ACCOUNT = 1001;
+    uint16 constant LOW_MSG_VALUE = 1002;
+    // Order errors
+    uint16 constant NOT_OWNER = 2000;
+    uint16 constant NOT_ROOT = 2001;
+
+}

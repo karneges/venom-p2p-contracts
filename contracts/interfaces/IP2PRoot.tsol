@@ -1,0 +1,16 @@
+pragma ever-solidity >= 0.62.0;
+
+import "../lib/CommonStructs.tsol";
+
+
+interface IP2PRoot {
+    event OrderCreated(address user, uint128 orderNonce);
+    event OrderCancelled(address user, uint128 orderNonce);
+    event OrderSubmitted(address user, uint128 orderNonce, address buyer);
+    event AccountCreated(address user);
+
+    function onAccountCreated(address _user) external;
+    function onOrderCreated(address _user, uint128 _orderNonce) external;
+    function onOrderSubmitted(address _user, uint128 _orderNonce, address _buyer) external;
+    function onOrderCanceled(address _user, uint128 _orderNonce) external;
+}

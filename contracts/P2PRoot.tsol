@@ -1,0 +1,96 @@
+pragma ever-solidity >= 0.62.0;
+pragma AbiHeader expire;
+pragma AbiHeader pubkey;
+
+import "./lib/Gas.tsol";
+import "./P2PAccount.tsol";
+import "./lib/Errors.tsol";
+
+import "@broxus/ever-contracts/contracts/libraries/MsgFlag.tsol";
+import "./lib/CommonStructs.tsol";
+import "./interfaces/IP2PRoot.tsol";
+import "@broxus/tip3/contracts/interfaces/ITokenWallet.tsol";
+
+
+
+
+contract P2PRoot is IP2PRoot {
+    uint16 static _nonce;
+    TvmCell static accountCode;
+    uint128 accountNonce;
+    address owner;
+
+    mapping(address => address) public accounts;
+    function _reserve() internal pure returns (uint128) {
+        return math.max(address(this).balance - msg.value, Gas.MIN_ROOT_BALANCE);
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, Errors.NOT_OWNER);
+        _;
+    }
+
+    modifier onlyAccount(address _user) {
+        require(getAccountAddress(_user) == msg.sender, Errors.NOT_ACCOUNT);
+        _;
+    }
+
+    constructor(address _owner) public {
+        tvm.accept();
+        owner = _owner;
+    }
+
+    function _buildAccountStateInit(address _user) internal returns (TvmCell) {
+        return tvm.buildStateInit({
+            contr: P2PAccount,
+            varInit: {
+            root: address(this),
+            owner: _user
+        },
+            pubkey: tvm.pubkey(),
+            code: accountCode
+        });
+    }
+
+    function createP2PAccounts() public {
+        require(msg.value >= 2 ever, Errors.LOW_MSG_VALUE);
+        tvm.rawReserve(_reserve(), 0);
+
+        new P2PAccount{
+            stateInit: _buildAccountStateInit(msg.sender),
+            value: 0,
+            flag:MsgFlag.ALL_NOT_RESERVED
+        }();
+    }
+    function onAccountCreated(address _user) external override onlyAccount(_user) {
+        tvm.rawReserve(_reserve(), 0);
+        accounts[_user] = msg.sender;
+        emit AccountCreated(_user);
+        _user.transfer({value: 0, flag: MsgFlag.ALL_NOT_RESERVED, bounce: false});
+    }
+
+    function getAccountAddress(address _user) public returns (address) {
+        return address(
+            tvm.hash(_buildAccountStateInit(_user))
+        );
+    }
+
+    function onOrderCreated(address _user, uint128 _orderNonce) external override onlyAccount(_user) {
+        tvm.rawReserve(_reserve(), 0);
+        emit OrderCreated(_user, _orderNonce);
+        _user.transfer({value: 0, flag: MsgFlag.ALL_NOT_RESERVED, bounce: false});
+    }
+
+    function onOrderCanceled(address _user, uint128 _orderNonce) external override onlyAccount(_user) {
+        tvm.rawReserve(_reserve(), 0);
+        emit OrderCancelled(_user, _orderNonce);
+        _user.transfer({value:0, flag: MsgFlag.ALL_NOT_RESERVED, bounce: false});
+    }
+
+    function onOrderSubmitted(address _user, uint128 _orderNonce, address _buyer) external override onlyAccount(_user) {
+        tvm.rawReserve(_reserve(), 0);
+        emit OrderSubmitted(_user, _orderNonce, _buyer);
+        _buyer.transfer({value: 0, flag: MsgFlag.ALL_NOT_RESERVED, bounce: false});
+    }
+
+}
