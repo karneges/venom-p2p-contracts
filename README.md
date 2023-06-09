@@ -11,4 +11,4 @@ Architeture includes 2 type of actors.
 
 
 
-![Untitled Diagram-Page-2.drawio.png](https://cdn.dorahacks.io/static/files/188955bc33adf8a40a301b1443497947.png)
+![Untitled Diagram-Page-2.drawio (2).png](https://cdn.dorahacks.io/static/files/188a1df52fe341e62319a1245dcb40fb.png)
