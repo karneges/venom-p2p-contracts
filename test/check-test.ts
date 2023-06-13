@@ -148,7 +148,8 @@ describe("Test Sample contract", async function () {
         .getDetails()
         .call()
         .then(res => res.value0);
-      expect(aliceP2PAccountDetails.orders[0][1].state).to.be.eq("3");
+      debugger;
+      expect(aliceP2PAccountDetails.orders.length).to.be.eq(0);
     }
   });
 });
